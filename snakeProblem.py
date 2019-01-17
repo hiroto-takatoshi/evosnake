@@ -16,6 +16,8 @@ import matplotlib.pyplot as plt
 
 from multiprocessing import Pool
 
+from hanging_threads import start_monitoring
+
 from ctypes import *
 
 S_UP, S_RIGHT, S_DOWN, S_LEFT = 0,1,2,3
@@ -35,6 +37,7 @@ class PyStruct(Structure):
 		("a", c_int),
 		("b", c_int),
 		("c", c_int),
+		("k", c_int),
 		("mat", (c_int * 15) * 15),
 		("q", (c_int * 2) * 200),
 		("fx", c_int),
@@ -45,7 +48,6 @@ class PyStruct(Structure):
 
 def getDist(a, b):
 	return np.linalg.norm(np.asarray(a) - np.asarray(b))
-
 # faster interface of floodfill function
 def ff(bd, fd):
 
@@ -63,10 +65,24 @@ def ff(bd, fd):
 	ps.fy = fd[1]
 
 	so.floodfill(byref(ps))
+	reta = 1
+	if ps.c - 2 != 144 - len(bd):
+		reta = -9000 - (144 - len(bd)) + (ps.c - 2)
 
-	#print(ps.c - 2, 144 - len(bd))
-	
-	return ps.c / (146.0 - len(bd)), ps.b , ps.d, ps.a, ps.e
+	g = 0
+	#print(bd)
+	xx = bd[-1][0]
+	yy = bd[-1][1]
+	g = max(ps.mat[xx+1][yy], g)
+	g = max(ps.mat[xx-1][yy], g)
+	g = max(ps.mat[xx][yy+1], g)
+	g = max(ps.mat[xx][yy-1], g)
+
+	if g == 0:
+		g = -200
+	else : g = 0
+
+	return reta, ps.b , ps.d, ps.a, ps.e, g, (ps.k-1) * (-200)
 
 def nn(l, b):
 	ret = b
@@ -82,9 +98,11 @@ class SnakePlayer(list):
 	def __init__(self):
 		self.direction = S_RIGHT
 		self.body = [ [4,10], [4,9], [4,8], [4,7], [4,6], [4,5], [4,4], [4,3], [4,2], [4,1],[4,0] ]
+		
 		self.score = 0
 		self.ahead = []
 		self.food = []
+		
 		# debug var
 		self.aaa = 0.0
 		self.bbb = 0.0
@@ -168,7 +186,7 @@ class SnakePlayer(list):
 		for x in self.body[:-1]:
 			newBody.append(x)
 
-		a, b, c, d, e = self.getReachableScore(newBody)
+		a, b, c, d, e, g, k = self.getReachableScore(newBody)
 		#print("%3.3g %3.3g %3.3g %3.3g %3.3g" % (a, b, c, d, e))
 		#time.sleep(1)
 
@@ -199,19 +217,26 @@ class SnakePlayer(list):
 		score = nn([(n21, w[101]), (n22, w[102]), (n23, w[103]) , (n24, w[104]), (n25, w[105])], w[106])
 		"""
 
-		part1 = self.helperQuad(f, 0, w[0], w[1]) * self.helperQuad(a, 0, w[2], w[3])
-		part2 = self.helperQuad(f, 0, w[4], w[5]) * self.helperQuad(b, 0, w[6], w[7])
-		part3 = self.helperQuad(f, 0, w[8], w[9]) * self.helperQuad(c, 0, w[10], w[11])
-		part4 = self.helperQuad(f, 0, w[12], w[13]) * self.helperQuad(d, 0, w[14], w[15])
-		part5 = self.helperQuad(f, 0, w[16], w[17]) * self.helperQuad(e, 0, w[18], w[19])
+		part1 = self.helperQuad(f, 0, w[0], w[1]) * self.helperQuad(b, 0, w[2], w[3])
+		#part1 = k
+		part2 = self.helperQuad(f, 0, w[4], w[5]) * self.helperQuad(c, 0, w[6], w[7])
+		part3 = self.helperQuad(f, 0, w[8], w[9]) * self.helperQuad(d, 0, w[10], w[11])
+		part4 = self.helperQuad(f, 0, w[12], w[13]) * self.helperQuad(e, 0, w[14], w[15])
+		#part5 = self.helperQuad(f, 0, w[16], w[17]) * self.helperQuad(e, 0, w[18], w[19])
+		#part6 = self.helperQuad(f, 0, w[20], w[21]) * self.helperQuad(g, 0, w[22], w[23])
+		#part6 = g
+		part5 = g
+		part6 = k
 
-		score = part1 + part2 + part3 + part4 + part5
 
-		return score
+		score = part1 + part2 + part3 + part4 + part5 + part6
+
+		return score, k
 
 	def updateDirection(self, w, verb=False):
-		bestScore = -100000.0
+		bestScore = -1e100
 		bestDir = self.direction
+		cc = -10000
 		
 		for i in range(4):
 			if i == self.reverseDirection():
@@ -221,8 +246,15 @@ class SnakePlayer(list):
 			if self.sense_wall_ahead(): continue
 			newBody = [self.ahead,]
 			newBody.append(self.body[:-1])
-			score = self.getScore(w)
-			if score > bestScore :
+			score, c = self.getScore(w)
+			#print(c)
+			if c > cc:
+				#if cc : print(cc, c)
+				cc = c
+				
+				bestScore = score
+				bestDir = i	
+			elif c == cc and score > bestScore :
 				bestScore = score
 				bestDir = i			
 		
@@ -254,7 +286,9 @@ class SnakePlayer(list):
 # This function places a food item in the environment
 def placeFood(snake):
 	food = []
+	st = time.time()
 	while len(food) < NFOOD:
+		if time.time() - st > 10: assert False, str(len(snake.body))
 		potentialfood = [random.randint(1, (YSIZE-2)), random.randint(1, (XSIZE-2))]
 		if not (potentialfood in snake.body) and not (potentialfood in food):
 			food.append(potentialfood)
@@ -363,19 +397,25 @@ def runGame(individual, verb=False):
 
 	food = placeFood(snake)
 	timer = 0
-	while not snake.snakeHasCollided() and not timer == XSIZE * YSIZE:
+
+	st = time.time()
+
+	while not snake.snakeHasCollided() and not timer == XSIZE * YSIZE and len(snake.body) < 144:
 
 		## EXECUTE THE SNAKE'S BEHAVIOUR HERE ##
+
+		if time.time() - st > 10: assert False
 
 		snake.updateDirection(individual, verb)
 		snake.updatePosition()
 
 		if snake.body[0] in food:
 			snake.score += 1
+			if len(snake.body) == 144:
+				#snakeList1.append(copy.deepcopy(snake))
+				return snake.score
 			food = placeFood(snake)
-			if snake.score >= phase and verb:
-				snakeList1.append(copy.deepcopy(snake))
-				return
+			
 			timer = 0
 		else:	
 			snake.body.pop()
@@ -388,14 +428,14 @@ def runGame(individual, verb=False):
 
 def runGameHelper(w):
 	global phase
-	totScore = 0.0
-	for i in range(2):
+	totScore = []
+	for i in range(5):
 		x = runGame(w)
 		#if x <= phase:
 		#	return 0.0, 
-		totScore += x
+		totScore.append(x)
 	#assert(totScore / 2.0 >= phase)
-	return totScore / 2.0, 
+	return np.max(totScore), 
 
 def eaMuPlusLambda1(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
 				   stats=None, halloffame=None, verbose=__debug__):
@@ -455,8 +495,9 @@ def eaMuPlusLambda1(population, toolbox, mu, lambda_, cxpb, mutpb, ngen,
 		if record['avg'] > k:
 			k = record['avg']
 			kk = gen
-		if kk - gen > 10:
-			break
+		
+		if gen - kk > 10:
+			return population, logbook
 		if verbose:
 			print(logbook.stream)
 		'''
@@ -500,7 +541,7 @@ def main():
 	toolbox = base.Toolbox()
 	toolbox.register("attr_float", random.random)
 	toolbox.register("individual", tools.initRepeat, creator.Individual,
-					lambda : random.random() * 2 - 1, n=20)
+					lambda : random.random() * 2 - 1, n=16)
 	
 	toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 	
@@ -519,7 +560,7 @@ def main():
 	global thePool
 	global phase
 	global succFlag
-	thePool = Pool(10)
+	thePool = Pool(16)
 	toolbox.register("map", thePool.map)
 
 	'''
@@ -561,7 +602,7 @@ def main():
 	#'''
 	lastPop = []
 
-	for i in range(10):
+	for i in range(1):
 
 		pop = toolbox.population(n=300)
 		hof = tools.HallOfFame(3)
@@ -571,9 +612,11 @@ def main():
 		
 		lastPop += [x for x in hof]
 
+		print(hof[0])
+
 		print("Deme ", i, "ended, result = ", runGameHelper(hof[0]))
 
-	#return
+	return
 
 	hof = tools.HallOfFame(2)
 	#print(bigList)
@@ -667,4 +710,6 @@ def debug():
 if __name__ == "__main__":
 	#debug()
 	
+	#monitoring_thread = start_monitoring()
 	main()
+
