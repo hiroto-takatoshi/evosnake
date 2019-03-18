@@ -1,5 +1,5 @@
 # EVOSNAKE
-A Multi-objgective GA demo for the snake game
+A Multi-objective GA demo for the snake game
 
 ## Library used
 
